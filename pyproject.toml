@@ -5,6 +5,7 @@ description = "Access myID (https://myid.gov.au) without a smartphone"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=45.0.3",
     "httpx>=0.28.1",
     "meatie>=0.1.23",
     "pydantic>=2.11.5",
