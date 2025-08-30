@@ -67,7 +67,7 @@ class ProofOfIdentityProcess(BaseModel):
     strength: str
     acceptedTermsAndConditionsVersion: str
     processId: str
-    links: list[dict]
+    links: list[Link]
 
 
 class EmailVerificationTask(BaseModel):
@@ -110,7 +110,7 @@ class UnauthenticatedClient(meatie_httpx.AsyncClient):
     ...         print(repr(proof_of_identity_process))
     >>> asyncio.run(test())
     TermsAndConditions(url='https://www.myid.gov.au/app_terms', version='1.0.0.0')
-    ProofOfIdentityProcess(status='', strength='', acceptedTermsAndConditionsVersion='1.0.0.0', processId='...', links=[{'rel': 'self', 'method': 'get', 'href': '/api/v1/poi/...', 'authentication': 'credential'}, {'rel': 'next', 'method': 'post', 'href': '/api/v1/poi/...', 'authentication': 'none'}])
+    ProofOfIdentityProcess(status='', strength='', acceptedTermsAndConditionsVersion='1.0.0.0', processId='...', links=[Link(...), Link(...)])
     """
 
     def __init__(self):
@@ -275,13 +275,11 @@ class CredentialClient(meatie_httpx.AsyncClient):
 
     This client's endpoint is used to provide initial personal details for
     basic myID identity strength.
-
-    Initialise client with token contained in certificate response:
-    `CertificateResponse.credentialToken`.
     """
 
     def __init__(self, token: str):
-        """Initialise HTTP client with JWT bearer token.
+        """Initialise HTTP client with JSON Web Token found in certificate response:
+        `CertificateResponse.credentialToken`.
 
         X-AuditSessionId header is set to JWT's ID (jti).
         """
@@ -299,14 +297,177 @@ class CredentialClient(meatie_httpx.AsyncClient):
             )
         )
 
-    @endpoint("poi/{process_id}/documents/personalDetailsDocuments")
+    @endpoint("/poi/{process_id}/documents/personalDetailsDocuments")
     async def post_personal_details(
-        self, body: PersonalDetailsBody
+        self, process_id: str, body: PersonalDetailsBody
     ) -> PersonalDetailsDocument:
-        """Submits personal details.
+        """Submits personal details for verification to achieve Basic identity strength.
 
-        Returns personal details document.
+        Personal details match those previously submitted for an identity tied to
+        the same email address.
+
+        Basic identity strength must be achieved before using ExtensionClient.
         """
+
+
+class OidcAuth(httpx.Auth):
+    """Implments myID's custom OpenID Connect authentication flow."""
+
+    requires_response_body = True
+
+    def __init__(self, identity: "Identity", email: str, certificate: x509.Certificate):
+        """Initialise with objects required to generate signed JSON Web Tokens."""
+        self.identity = identity
+        self.email = email
+        self.certificate = certificate
+        self.token = None
+        self.jti = None
+
+    def auth_flow(self, request):
+        """Performs OpenID Connect flow.
+
+        Subsequent requests use access token (self.token) obtained during first request.
+
+        Sets Authorization header to bearer access token.
+        Sets X-AuditSessionId header to JWT's ID (jti).
+        """
+        if self.token is None:
+            assertion = self.identity.create_authorization_grant(
+                self.email, self.certificate
+            )
+            client_assertion = self.identity.create_client_authentication(
+                self.certificate
+            )
+            response = yield httpx.Request(
+                "POST",
+                "https://mygovid.gov.au/core/connect/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                    "client_assertion": client_assertion,
+                    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    "scope": "openid credential_info email profile",
+                },
+            )
+            self.token = response.json()["access_token"]
+            self.jti = jwt.decode(self.token, options={"verify_signature": False})[
+                "jti"
+            ]
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        request.headers["X-AuditSessionId"] = self.jti
+        yield request
+
+
+class Device(BaseModel):
+    appVersion: str
+    createdDate: str
+    formFactor: str
+    isPushNotificationEnabled: bool
+    lastExAuthnDate: str
+    lastUpdatedDate: str
+    name: str
+    osVersion: str
+    runtime: str
+    runtimeVersion: str
+    platform: str
+    status: str
+    version: int
+    links: list[Link]
+    notificationProvider: str
+
+    def get_device_id(self) -> int:
+        """Returns device ID parsed from links."""
+        for link in self.links:
+            if link.rel == "self" and link.method == "get":
+                # >>> href = "/api/v2/identities/31399999/devices/26899999"
+                # >>> href.split("/")[-1]
+                # '26899999'
+                return int(link.href.split("/")[-1])
+
+
+class DevicesResponse(BaseModel):
+    meta: dict
+    items: list[Device]
+    links: list[Link]
+
+
+class EventAdditionalData(BaseModel):
+    referenceCode: str
+    validateReferenceCode: bool
+
+
+class Event(BaseModel):
+    eventId: int
+    correlationId: str
+    createdDate: str
+    status: str
+    expiryDate: str
+    eventType: str
+    links: list[Link]
+    additionalData: EventAdditionalData
+
+
+class ExtensionClient(meatie_httpx.AsyncClient):
+    """myID client for endpoints authenticated with "extension" token.
+
+    This client implements identity, device and (authentication) event endpoints.
+    """
+
+    def __init__(self, identity: "Identity", email: str, certificate: x509.Certificate):
+        """Initialise HTTP client with required OidcAuth parameters."""
+        super().__init__(
+            httpx.AsyncClient(
+                auth=OidcAuth(identity, email, certificate),
+                headers=static_headers,
+                event_hooks={"request": [add_request_id]},
+                base_url=base_url,
+            )
+        )
+
+    @endpoint("/poi/{process_id}")
+    async def get_proof_of_identity_process(
+        self, process_id: str
+    ) -> ProofOfIdentityProcess:
+        """Returns proof of identity details.
+
+        From `ProofOfIdentityProcess.links` we can pivot to an identity.
+        """
+
+    async def get_identity_id(self, process_id: str) -> int:
+        """Returns identity ID parsed from `ProofOfIdentityProcess` links."""
+        proof_of_identity_process = await self.get_proof_of_identity_process(process_id)
+        for link in proof_of_identity_process.links:
+            if link.href.startswith("/api/v1/identities/"):
+                # >>> href = "/api/v1/identities/31329999/variationOptions"
+                # >>> href.split("/")
+                # ['', 'api', 'v1', 'identities', '31329999', 'variationOptions']
+                return int(link.href.split("/")[4])
+
+    @endpoint("/identities/{identity_id}/devices")
+    async def get_devices(self, identity_id: int) -> DevicesResponse:
+        """Returns details of devices associated with identity."""
+
+    @endpoint("/identities/{identity_id}/devices/{device_id}/eventqueue", method="GET")
+    async def check_event_queue(
+        self, identity_id: int, device_id: int, action: str = "visit"
+    ) -> Event:
+        """Returns event or raises `meatie.ParseResponseError` exception.
+
+        Poll this endpoint, wrapped in a try/except clause event is returned.
+
+        The server returns a 404 status if there is no event, causing Meatie to
+        fail to parse the (lack of) response.
+        """
+
+    # TODO: accept/reject event
+    # @endpoint("/identities/{identity_id}/events")
+    # async def post_event():
+    #     pass
+
+    # TODO: delete event
+    # @endpoint("/identities/{identity_id}/devices/{device_id}/eventqueue/events/{event_id}")
+    # async def delete_event():
+    #     pass
 
 
 class Identity:
@@ -466,4 +627,61 @@ class Identity:
                     ).decode()
                 ],
             },
+        )
+
+
+class OidcAuth(httpx.Auth):
+    """Performs myID custom OpenID Connect authentication."""
+
+    requires_response_body = True
+
+    def __init__(self, identity: Identity, email: str, certificate: x509.Certificate):
+        self.identity = identity
+        self.email = email
+        self.certificate = certificate
+        self.token = None
+        self.jti = None
+
+    def auth_flow(self, request):
+        """Sets authentication headers, authenticating first if necessary."""
+        if self.token is None:
+            assertion = self.identity.create_authorization_grant(
+                self.email, self.certificate
+            )
+            client_assertion = self.identity.create_client_authentication(
+                self.certificate
+            )
+            response = yield httpx.Request(
+                "POST",
+                "https://mygovid.gov.au/core/connect/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                    "client_assertion": client_assertion,
+                    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    "scope": "openid credential_info email profile",
+                },
+            )
+            self.token = response.json()["access_token"]
+            self.jti = jwt.decode(self.token, options={"verify_signature": False})[
+                "jti"
+            ]
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        # session id header matches jwt's id
+        request.headers["X-AuditSessionId"] = self.jti
+        yield request
+
+
+class CredentialClient(meatie_httpx.Client):
+    """myID client authenticated using OpenID Connect."""
+
+    def __init__(self, identity: Identity, email: str, certificate: x509.Certificate):
+        """Initiates HTTP client with JWT bearer token."""
+        super().__init__(
+            httpx.Client(
+                auth=OidcAuth(identity, email, certificate),
+                headers=static_headers,
+                event_hooks={"request": [add_request_id]},
+                base_url=base_url,
+            )
         )
