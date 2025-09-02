@@ -13,8 +13,10 @@ identity.
 """
 
 import asyncio
-import logging
+import sqlite3
+from typing import Optional
 
+from cryptography.hazmat.primitives.serialization import Encoding
 from rich_pixels import HalfcellRenderer, Pixels
 from textual import work
 from textual.app import App, ComposeResult
@@ -42,10 +44,8 @@ from myid import (
     UnauthenticatedClient,
 )
 
-logging.basicConfig(level=logging.INFO)
 
-
-class TermsOfUseScreen(Screen[bool]):
+class TermsOfUseScreen(Screen[Optional[bool]]):
     """
     ▗▄▄▄▖▗▄▄▄▖▗▄▄▖ ▗▖  ▗▖ ▗▄▄▖     ▗▄▖ ▗▄▄▄▖    ▗▖ ▗▖ ▗▄▄▖▗▄▄▄▖
       █  ▐▌   ▐▌ ▐▌▐▛▚▞▜▌▐▌       ▐▌ ▐▌▐▌       ▐▌ ▐▌▐▌   ▐▌
@@ -78,8 +78,10 @@ class TermsOfUseScreen(Screen[bool]):
             yield Link(self.terms_and_conditions.url)
             yield Checkbox("I understand and accept the terms of use")
             with Horizontal():
-                yield Button("Cancel", action="app.pop_screen")
-                self.next_button = Button("Next >", "primary", disabled=True, id="next")
+                yield Button("Cancel")
+                self.next_button = Button(
+                    "Next >", "primary", name="next", disabled=True
+                )
                 yield self.next_button
 
     def on_checkbox_changed(self, event: Checkbox.Changed):
@@ -87,12 +89,14 @@ class TermsOfUseScreen(Screen[bool]):
         self.next_button.disabled = not event.checkbox.value
 
     def on_button_pressed(self, event: Button.Pressed):
-        """Accepts terms and conditions."""
-        if event.button.id == "next":
+        """Returns True to caller."""
+        if event.button.name == "next":
             self.dismiss(True)
+        else:
+            self.dismiss()
 
 
-class EmailAddressScreen(Screen[str]):
+class EmailAddressScreen(Screen[Optional[str]]):
     """
     ▗▄▄▄▖▗▖  ▗▖ ▗▄▖ ▗▄▄▄▖▗▖        ▗▄▖ ▗▄▄▄ ▗▄▄▄ ▗▄▄▖ ▗▄▄▄▖ ▗▄▄▖ ▗▄▄▖
     ▐▌   ▐▛▚▞▜▌▐▌ ▐▌  █  ▐▌       ▐▌ ▐▌▐▌  █▐▌  █▐▌ ▐▌▐▌   ▐▌   ▐▌
@@ -121,19 +125,28 @@ class EmailAddressScreen(Screen[str]):
             self.input = Input(placeholder="Email address")
             yield self.input
             with Horizontal():
-                yield Button("Cancel", action="app.pop_screen")
-                self.next_button = Button("Next >", "primary", disabled=True, id="next")
+                yield Button("Cancel")
+                self.next_button = Button(
+                    "Next >", "primary", name="next", disabled=True
+                )
                 yield self.next_button
 
     def on_input_changed(self, event: Input.Changed):
         """Enables next button when input not empty."""
         self.next_button.disabled = not event.input.value
 
+    def on_input_submitted(self, event: Input.Submitted):
+        self.next_button.press()
+
     def on_button_pressed(self, event: Button.Pressed):
-        self.dismiss(self.input.value)
+        """Returns email address to caller."""
+        if event.button.name == "next":
+            self.dismiss(self.input.value)
+        else:
+            self.dismiss()
 
 
-class EmailVerificationScreen(Screen[str]):
+class EmailVerificationScreen(Screen[Optional[str]]):
     """
     ▗▄▄▄▖▗▖  ▗▖ ▗▄▖ ▗▄▄▄▖▗▖       ▗▖  ▗▖▗▄▄▄▖▗▄▄▖ ▗▄▄▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▄▖ ▗▄▖▗▄▄▄▖▗▄▄▄▖ ▗▄▖ ▗▖  ▗▖
     ▐▌   ▐▛▚▞▜▌▐▌ ▐▌  █  ▐▌       ▐▌  ▐▌▐▌   ▐▌ ▐▌  █  ▐▌     █  ▐▌   ▐▌ ▐▌ █    █  ▐▌ ▐▌▐▛▚▖▐▌
@@ -164,20 +177,25 @@ class EmailVerificationScreen(Screen[str]):
             self.input = Input(placeholder="Verification code", type="integer")
             yield self.input
             with Horizontal():
-                yield Button("Cancel", action="app.pop_screen")
-                self.next_button = Button("Next >", "primary", disabled=True, id="next")
+                yield Button("Cancel")
+                self.next_button = Button(
+                    "Next >", "primary", name="next", disabled=True
+                )
                 yield self.next_button
 
     def on_input_changed(self, event: Input.Changed):
         """Enables next button when input not empty."""
         self.next_button.disabled = not event.input.value
 
+    def on_input_submitted(self, event: Input.Submitted):
+        self.next_button.press()
+
     def on_button_pressed(self, event: Button.Pressed):
         """Returns verification code to caller."""
         self.dismiss(self.input.value)
 
 
-class PasswordScreen(Screen[str]):
+class PasswordScreen(Screen[Optional[str]]):
     """
     ▗▄▄▖  ▗▄▖  ▗▄▄▖ ▗▄▄▖▗▖ ▗▖ ▗▄▖ ▗▄▄▖ ▗▄▄▄
     ▐▌ ▐▌▐▌ ▐▌▐▌   ▐▌   ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌▐▌  █
@@ -208,22 +226,28 @@ class PasswordScreen(Screen[str]):
             yield self.password_input
             yield self.confirm_password_input
             with Horizontal():
-                yield Button("Cancel", action="app.pop_screen")
-                self.finish_button = Button(
-                    "Finish", "primary", disabled=True, id="finish"
+                yield Button("Cancel")
+                self.next_button = Button(
+                    "Next >", "primary", name="next", disabled=True
                 )
-                yield self.finish_button
+                yield self.next_button
 
     def on_input_changed(self, event: Input.Changed):
-        """Disables next button if password empty or don't match."""
+        """Disables finish button if password empty or don't match."""
         self.next_button.disabled = (
             not event.input.value
             or self.password_input.value != self.confirm_password_input.value
         )
 
+    def on_input_submitted(self, event: Input.Submitted):
+        self.next_button.press()
+
     def on_button_pressed(self, event: Button.Pressed):
         """Returns password to caller."""
-        self.dismiss(self.password_input.value)
+        if event.button.name == "next":
+            self.dismiss(self.password_input.value)
+        else:
+            self.dismiss()
 
 
 class PersonalDetailsScreen(Screen[Optional[PersonalDetailsBody]]):
@@ -378,10 +402,16 @@ class InitialScreen(Screen):
                 id="wizard",
             )
             with Vertical():
-                emails = [row[0] for row in []]
-                yield Select(emails, prompt="Select identity")
+                identities = self.get_identities()
+                self.identity_select = Select.from_values(
+                    identities,
+                    prompt="Select identity",
+                    allow_blank=not bool(identities),
+                )
+                yield self.identity_select
                 yield Input(placeholder="Password", password=True)
-                yield Button("Sign In", "primary")
+                self.sign_in_button = Button("Sign In", "primary", disabled=True)
+                yield self.sign_in_button
                 yield Static()
                 yield Button(
                     "Create New Identity",
@@ -390,37 +420,64 @@ class InitialScreen(Screen):
                 )
                 yield Button("Quit", variant="error", action="app.quit")
 
+    def on_input_changed(self, event: Input.Changed):
+        """Enables sign in button when password not empty."""
+        self.sign_in_button.disabled = (
+            not event.input.value and self.identity_select.is_blank()
+        )
+
     @work
     async def action_create_new_identity(self):
+        self.loading = True
         async with UnauthenticatedClient() as client:
             terms_and_conditions = await client.get_terms_and_conditions()
-            assert await self.app.push_screen_wait(
+            if not await self.app.push_screen_wait(
                 TermsOfUseScreen(terms_and_conditions)
-            )
+            ):
+                self.loading = False
+                return
+
             proof_of_identity_process = await client.initiate_proof_of_identity_process(
                 terms_and_conditions.version
             )
             email = await self.app.push_screen_wait(EmailAddressScreen())
+            if email is None:
+                self.loading = False
+                return
+
             email_verification_task = await client.initiate_email_verification_task(
                 proof_of_identity_process.processId, email
             )
             verification_code = await self.app.push_screen_wait(
                 EmailVerificationScreen(email)
             )
+            if verification_code is None:
+                self.loading = False
+                return
+
             email_verification_result = await client.complete_email_verification_task(
                 proof_of_identity_process.processId,
                 email_verification_task.id,
                 EmailVerificationBody(email, verification_code),
             )
-            # TODO: Spawn separate worker for certificate signing.
             identity = Identity()
             certificate_worker = self.request_certificate(
                 identity, email_verification_result.poiAssuranceToken
             )
             password = await self.app.push_screen_wait(PasswordScreen())
-            # TODO: await separate worker result, insert key and certificate into database
-            await certificate_worker.wait()
-            self.app.push_screen(CompleteScreen())
+            if password is None:
+                self.loading = False
+                return
+
+            certificate_response = await certificate_worker.wait()
+            self.save_identity_and_certificate_response(
+                email, password, identity, certificate_response
+            )
+            self.identity_select.set_options(
+                [(email, email) for email in self.get_identities()]
+            )
+            await self.app.push_screen_wait(CompleteScreen())
+        self.loading = False
 
     @work
     async def request_certificate(
@@ -434,6 +491,38 @@ class InitialScreen(Screen):
             await asyncio.sleep(certificate_signing_task.eta * 1.5)
             return await client.get_signed_certificate(certificate_signing_task.id)
 
+    def get_identities(self) -> list[str]:
+        """Returns emails from identity table."""
+        return [
+            row[0] for row in self.app.connection.execute("SELECT email FROM identity")
+        ]
+
+    def save_identity_and_certificate_response(
+        self,
+        email: str,
+        password: str,
+        identity: Identity,
+        certificate_response: CertificateResponse,
+    ):
+        """Writes (encrypted) identity and certificate to database."""
+        print("is this being run?")
+        key = identity.export_key(password.encode())
+        certificate = certificate_response.decode_certificate_chain()[0]
+        self.app.connection.execute(
+            """
+            INSERT INTO identity (email, key)
+            VALUES (?, ?)
+            """,
+            (email, key),
+        )
+        self.app.connection.execute(
+            """
+            INSERT INTO identity_certificate (email, certificate_der)
+            VALUES (?, ?)
+            """,
+            (email, certificate.public_bytes(Encoding.DER)),
+        )
+
 
 class OpenMyid98(App):
     """A myID Textual app."""
@@ -444,8 +533,7 @@ class OpenMyid98(App):
 
     def on_mount(self):
         self.theme = "textual-light"
-        # self.push_screen(InitialScreen())
-        self.push_screen(CompleteScreen())
+        self.push_screen(InitialScreen())
 
 
 if __name__ == "__main__":
