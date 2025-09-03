@@ -54,6 +54,14 @@ class TermsAndConditions(BaseModel):
     version: str
 
 
+@dataclass
+class Link:
+    rel: str
+    method: str
+    href: str
+    authentication: str
+
+
 class ProofOfIdentityProcess(BaseModel):
     status: str
     strength: str
@@ -192,13 +200,19 @@ class CertificateResponse(BaseModel):
 
 
 class AssuranceClient(meatie_httpx.AsyncClient):
-    """myID client for proof of identity assurance endpoints.
+    """myID client for endpoints authenticated with "assurance" token.
 
-    Authenticated with token in `EmailVerificationResult`'s `poiAssuranceToken` field.
+    This client's endpoints are used to obtain a signed certificate.
+
+    Initialise client with token obtained after verifying email:
+    `EmailVerificationResult.poiAssuranceToken`.
     """
 
     def __init__(self, token: str):
-        """Initiates HTTP client with JWT bearer token."""
+        """Initialise HTTP client with JWT bearer token.
+
+        X-AuditSessionId header is set to JWT's ID (jti).
+        """
         super().__init__(
             httpx.AsyncClient(
                 headers=static_headers
@@ -231,6 +245,67 @@ class AssuranceClient(meatie_httpx.AsyncClient):
         """Returns signed certificate response.
 
         follow_redirects=True allows redirect to /credentials/x509s/issueStatements/...
+        """
+
+
+@dataclass
+class DateOfBirth:
+    year: int
+    month: int
+    day: int
+
+
+class PersonalDetailsBody(BaseModel):
+    givenName: str
+    familyName: str
+    dateOfBirth: DateOfBirth
+
+
+class PersonalDetailsDocument(BaseModel):
+    documentId: int
+    givenName: str
+    familyName: str
+    dateOfBirth: DateOfBirth
+    processId: str
+    links: list[Link]
+
+
+class CredentialClient(meatie_httpx.AsyncClient):
+    """myID client for endpoints authenticated with "credential" token.
+
+    This client's endpoint is used to provide initial personal details for
+    basic myID identity strength.
+
+    Initialise client with token contained in certificate response:
+    `CertificateResponse.credentialToken`.
+    """
+
+    def __init__(self, token: str):
+        """Initialise HTTP client with JWT bearer token.
+
+        X-AuditSessionId header is set to JWT's ID (jti).
+        """
+        super().__init__(
+            httpx.AsyncClient(
+                headers=static_headers
+                | {
+                    "Authorization": f"Bearer {token}",
+                    "X-AuditSessionId": (
+                        jwt.decode(token, options={"verify_signature": False})["jti"]
+                    ),
+                },
+                event_hooks={"request": [add_request_id]},
+                base_url=base_url,
+            )
+        )
+
+    @endpoint("poi/{process_id}/documents/personalDetailsDocuments")
+    async def post_personal_details(
+        self, body: PersonalDetailsBody
+    ) -> PersonalDetailsDocument:
+        """Submits personal details.
+
+        Returns personal details document.
         """
 
 
