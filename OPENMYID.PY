@@ -16,7 +16,6 @@ import asyncio
 import sqlite3
 from typing import Optional
 
-from cryptography.hazmat.primitives.serialization import Encoding
 from rich_pixels import HalfcellRenderer, Pixels
 from textual import work
 from textual.app import App, ComposeResult
@@ -34,7 +33,6 @@ from textual.widgets import (
 
 from myid import (
     AssuranceClient,
-    CertificateResponse,
     CredentialClient,
     DateOfBirth,
     EmailVerificationBody,
@@ -43,6 +41,62 @@ from myid import (
     TermsAndConditions,
     UnauthenticatedClient,
 )
+
+
+class IdentityStore:
+    """Manage myID digital identity persistence."""
+
+    def __init__(self, database: str):
+        """Opens connection to database.
+
+        Creates table `identity` if it doesn't already exist.
+
+        `identity` maps email address to Identity (PKCS#12 serialized export).
+        """
+        self.connection = sqlite3.connect(database, autocommit=True)
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS identity (
+                email TEXT PRIMARY KEY,
+                p12 BLOB NOT NULL
+            )
+            """
+        )
+
+    def get_emails(self) -> list[str]:
+        """Returns identity email addresses."""
+        return [
+            row[0]
+            for row in self.connection.execute(
+                """
+                SELECT email FROM identity
+                """
+            )
+        ]
+
+    def get_identity(self, email: str, password: str) -> Identity:
+        """Returns deserialized Identity."""
+        row = self.connection.execute(
+            """
+            SELECT p12 FROM identity
+            WHERE email = ?
+            """,
+            (email,),
+        ).fetchone()
+        p12 = row[0]
+        return Identity.from_export(p12, password.encode())
+
+    def insert(self, identity: Identity, password: str):
+        """Inserts serialized identity into database."""
+        email = identity.email
+        p12 = identity.export(password.encode())
+        self.connection.execute(
+            """
+            INSERT INTO identity (email, p12)
+            VALUES (?, ?)
+            """,
+            (email, p12),
+        )
 
 
 class TermsOfUseScreen(Screen[Optional[bool]]):
@@ -392,6 +446,10 @@ class InitialScreen(Screen):
     }
     """
 
+    def __init__(self):
+        super().__init__()
+        self.app: OpenMyid98
+
     def compose(self) -> ComposeResult:
         yield Static(__doc__.split("-")[0], id="ascii-art")
         with Horizontal():
@@ -402,11 +460,11 @@ class InitialScreen(Screen):
                 id="wizard",
             )
             with Vertical():
-                identities = self.get_identities()
+                emails = self.app.identity_store.get_emails()
                 self.identity_select = Select.from_values(
-                    identities,
+                    emails,
                     prompt="Select identity",
-                    allow_blank=not bool(identities),
+                    allow_blank=not bool(emails),
                 )
                 yield self.identity_select
                 yield Input(placeholder="Password", password=True)
@@ -428,6 +486,7 @@ class InitialScreen(Screen):
 
     @work
     async def action_create_new_identity(self):
+        """Creates new identity through a series of Screens."""
         self.loading = True
         async with UnauthenticatedClient() as client:
             terms_and_conditions = await client.get_terms_and_conditions()
@@ -436,7 +495,6 @@ class InitialScreen(Screen):
             ):
                 self.loading = False
                 return
-
             proof_of_identity_process = await client.initiate_proof_of_identity_process(
                 terms_and_conditions.version
             )
@@ -444,7 +502,6 @@ class InitialScreen(Screen):
             if email is None:
                 self.loading = False
                 return
-
             email_verification_task = await client.initiate_email_verification_task(
                 proof_of_identity_process.processId, email
             )
@@ -454,82 +511,62 @@ class InitialScreen(Screen):
             if verification_code is None:
                 self.loading = False
                 return
-
             email_verification_result = await client.complete_email_verification_task(
                 proof_of_identity_process.processId,
                 email_verification_task.id,
                 EmailVerificationBody(email, verification_code),
             )
-            identity = Identity()
-            certificate_worker = self.request_certificate(
-                identity, email_verification_result.poiAssuranceToken
-            )
-            password = await self.app.push_screen_wait(PasswordScreen())
-            if password is None:
-                self.loading = False
-                return
 
-            certificate_response = await certificate_worker.wait()
-            self.save_identity_and_certificate_response(
-                email, password, identity, certificate_response
-            )
-            self.identity_select.set_options(
-                [(email, email) for email in self.get_identities()]
-            )
-            await self.app.push_screen_wait(CompleteScreen())
-        self.loading = False
+        identity = Identity(email)
 
-    @work
-    async def request_certificate(
-        self, identity: Identity, assurance_token: str
-    ) -> CertificateResponse:
-        """Returns signed certificate response for identity."""
-        async with AssuranceClient(assurance_token) as client:
+        async with AssuranceClient(
+            email_verification_result.poiAssuranceToken
+        ) as client:
             certificate_signing_task = await client.initiate_certificate_signing_task(
-                identity.create_csr()
+                identity.create_certificate_signing_request(
+                    proof_of_identity_process.processId
+                )
             )
             await asyncio.sleep(certificate_signing_task.eta * 1.5)
-            return await client.get_signed_certificate(certificate_signing_task.id)
+            certificate_response = await client.get_signed_certificate(
+                certificate_signing_task.id
+            )
 
-    def get_identities(self) -> list[str]:
-        """Returns emails from identity table."""
-        return [
-            row[0] for row in self.app.connection.execute("SELECT email FROM identity")
-        ]
+        identity.process_certificate_response(certificate_response)
 
-    def save_identity_and_certificate_response(
-        self,
-        email: str,
-        password: str,
-        identity: Identity,
-        certificate_response: CertificateResponse,
-    ):
-        """Writes (encrypted) identity and certificate to database."""
-        print("is this being run?")
-        key = identity.export_key(password.encode())
-        certificate = certificate_response.decode_certificate_chain()[0]
-        self.app.connection.execute(
-            """
-            INSERT INTO identity (email, key)
-            VALUES (?, ?)
-            """,
-            (email, key),
+        async with CredentialClient(certificate_response.credentialToken) as client:
+            personal_details_body = await self.app.push_screen_wait(
+                PersonalDetailsScreen()
+            )
+            if personal_details_body is None:
+                self.loading = False
+                return
+            await client.post_personal_details(
+                proof_of_identity_process.processId, personal_details_body
+            )
+
+        password = await self.app.push_screen_wait(PasswordScreen())
+        if password is None:
+            self.loading = False
+            return
+        self.app.identity_store.insert(identity, password)
+
+        # Update and select new identity.
+        self.identity_select.set_options(
+            [(email, email) for email in self.app.identity_store.get_emails()]
         )
-        self.app.connection.execute(
-            """
-            INSERT INTO identity_certificate (email, certificate_der)
-            VALUES (?, ?)
-            """,
-            (email, certificate.public_bytes(Encoding.DER)),
-        )
+        self.identity_select.value = identity.email
+
+        await self.app.push_screen_wait(CompleteScreen())
+        self.loading = False
 
 
 class OpenMyid98(App):
     """A myID Textual app."""
 
-    def __init__(self, database: str):
+    def __init__(self, identity_store: IdentityStore):
         super().__init__()
-        self.database = database
+        self.identity_store = identity_store
 
     def on_mount(self):
         self.theme = "textual-light"
@@ -537,5 +574,7 @@ class OpenMyid98(App):
 
 
 if __name__ == "__main__":
-    app = OpenMyid98(database="openmyid.db")
+    identity_store = IdentityStore("openmyid.db")
+    app = OpenMyid98(identity_store)
     app.run()
+    identity_store.connection.close()
