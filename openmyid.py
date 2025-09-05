@@ -29,6 +29,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import asyncio
 import sqlite3
+from pathlib import Path
 from typing import Optional
 
 from rich_pixels import HalfcellRenderer, Pixels
@@ -470,7 +471,8 @@ class InitialScreen(Screen):
         with Horizontal():
             yield Static(
                 Pixels.from_image_path(
-                    "wizard.png", renderer=HalfcellRenderer(default_color="#E0E0E0")
+                    Path(__name__).parent / "wizard.png",
+                    renderer=HalfcellRenderer(default_color="#E0E0E0"),
                 ),
                 id="wizard",
             )
@@ -588,8 +590,12 @@ class OpenMyid98(App):
         self.push_screen(InitialScreen())
 
 
-if __name__ == "__main__":
+def main():
     identity_store = IdentityStore("openmyid.db")
     app = OpenMyid98(identity_store)
     app.run()
     identity_store.connection.close()
+
+
+if __name__ == "__main__":
+    main()
