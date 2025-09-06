@@ -35,14 +35,16 @@ from typing import Optional
 from rich_pixels import HalfcellRenderer, Pixels
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
+from textual.containers import Center, Horizontal, Vertical
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
     Checkbox,
+    Digits,
     Header,
     Input,
     Link,
+    LoadingIndicator,
     Select,
     Static,
 )
@@ -52,6 +54,7 @@ from myid import (
     CredentialClient,
     DateOfBirth,
     EmailVerificationBody,
+    ExtensionClient,
     Identity,
     PersonalDetailsBody,
     TermsAndConditions,
@@ -436,6 +439,115 @@ class CompleteScreen(Screen[None]):
         self.dismiss()
 
 
+class AuthenticatorScreen(Screen):
+    """
+     ▗▄▖ ▗▖ ▗▖▗▄▄▄▖▗▖ ▗▖▗▄▄▄▖▗▖  ▗▖▗▄▄▄▖▗▄▄▄▖ ▗▄▄▖ ▗▄▖▗▄▄▄▖▗▄▖ ▗▄▄▖
+    ▐▌ ▐▌▐▌ ▐▌  █  ▐▌ ▐▌▐▌   ▐▛▚▖▐▌  █    █  ▐▌   ▐▌ ▐▌ █ ▐▌ ▐▌▐▌ ▐▌
+    ▐▛▀▜▌▐▌ ▐▌  █  ▐▛▀▜▌▐▛▀▀▘▐▌ ▝▜▌  █    █  ▐▌   ▐▛▀▜▌ █ ▐▌ ▐▌▐▛▀▚▖
+    ▐▌ ▐▌▝▚▄▞▘  █  ▐▌ ▐▌▐▙▄▄▖▐▌  ▐▌  █  ▗▄█▄▖▝▚▄▄▖▐▌ ▐▌ █ ▝▚▄▞▘▐▌ ▐▌
+    """
+
+    CSS = """
+    Vertical {
+        margin: 0 4;
+    }
+    #email {
+        margin: 1 0;
+    }
+    LoadingIndicator {
+        height: 5;
+    }
+    Button {
+        margin: 1 0;
+    }
+    """
+
+    def __init__(self, identity: Identity):
+        """Initialise with identity."""
+        super().__init__()
+        self.identity = identity
+
+    @work
+    async def on_mount(self):
+        """Polls for authentication events."""
+        proof_of_identity_process_id = self.identity.get_proof_of_identity_process_id()
+        async with ExtensionClient(self.identity) as client:
+            identity_id = await client.get_identity_id(proof_of_identity_process_id)
+            while True:
+                event = await client.poll_for_authentication_event(
+                    proof_of_identity_process_id
+                )
+                approved = await self.app.push_screen_wait(
+                    LoginRequestScreen(event.additionalData.referenceCode)
+                )
+                if approved:
+                    await client.approve_authentication_event(identity_id, event)
+                else:
+                    await client.reject_authentication_event(identity_id, event)
+
+    def compose(self) -> ComposeResult:
+        yield Static(AuthenticatorScreen.__doc__)
+        with Vertical():
+            yield Static(f"Identity: [bold]{self.identity.email}[/bold]", id="email")
+            yield Static("Waiting for login request...")
+            yield LoadingIndicator()
+            yield Button("Sign Out", "error")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        self.app.pop_screen()
+
+
+class LoginRequestScreen(ModalScreen[bool]):
+    """
+    ▗▖    ▗▄▖  ▗▄▄▖▗▄▄▄▖▗▖  ▗▖    ▗▄▄▖ ▗▄▄▄▖▗▄▄▄▖ ▗▖ ▗▖▗▄▄▄▖ ▗▄▄▖▗▄▄▄▖
+    ▐▌   ▐▌ ▐▌▐▌     █  ▐▛▚▖▐▌    ▐▌ ▐▌▐▌   ▐▌ ▐▌ ▐▌ ▐▌▐▌   ▐▌     █
+    ▐▌   ▐▌ ▐▌▐▌▝▜▌  █  ▐▌ ▝▜▌    ▐▛▀▚▖▐▛▀▀▘▐▌ ▐▌ ▐▌ ▐▌▐▛▀▀▘ ▝▀▚▖  █
+    ▐▙▄▄▖▝▚▄▞▘▝▚▄▞▘▗▄█▄▖▐▌  ▐▌    ▐▌ ▐▌▐▙▄▄▖▐▙▄▟▙▖▝▚▄▞▘▐▙▄▄▖▗▄▄▞▘  █
+    """
+
+    CSS = """
+    LoginRequestScreen {
+        align: center middle;
+    }
+    Static {
+        width: auto;
+    }
+    Digits {
+        border: double $foreground;
+        text-style: bold;
+        width: auto;
+    }
+    Horizontal {
+        width: auto;
+        height: auto;
+    }
+    Button {
+        margin: 1;
+    }
+    """
+
+    def __init__(self, reference_code):
+        """Initialise screen with reference code."""
+        super().__init__()
+        self.reference_code = reference_code
+
+    def compose(self) -> ComposeResult:
+        with Center():
+            yield Static(LoginRequestScreen.__doc__)
+        with Center():
+            yield Digits(self.reference_code)
+        with Center():
+            with Horizontal():
+                yield Button("Approve", "success", name="approve")
+                yield Button("Reject", "error")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.name == "approve":
+            self.dismiss(True)
+        else:
+            self.dismiss(False)
+
+
 class InitialScreen(Screen):
     """Sign in or create a new identity."""
 
@@ -484,8 +596,11 @@ class InitialScreen(Screen):
                     allow_blank=not bool(emails),
                 )
                 yield self.identity_select
-                yield Input(placeholder="Password", password=True)
-                self.sign_in_button = Button("Sign In", "primary", disabled=True)
+                self.password_input = Input(placeholder="Password", password=True)
+                yield self.password_input
+                self.sign_in_button = Button(
+                    "Sign In", "primary", name="sign-in", disabled=True
+                )
                 yield self.sign_in_button
                 yield Static()
                 yield Button(
@@ -500,6 +615,18 @@ class InitialScreen(Screen):
         self.sign_in_button.disabled = (
             not event.input.value and self.identity_select.is_blank()
         )
+
+    def on_input_submitted(self, event: Input.Submitted):
+        self.sign_in_button.press()
+
+    def on_button_pressed(self, event: Button.Pressed):
+        """Push AuthenticatorScreen when sign in button pressed."""
+        if event.button.name == "sign-in":
+            assert isinstance(self.identity_select.value, str)
+            identity = self.app.identity_store.get_identity(
+                self.identity_select.value, self.password_input.value
+            )
+            self.app.push_screen(AuthenticatorScreen(identity))
 
     @work
     async def action_create_new_identity(self):

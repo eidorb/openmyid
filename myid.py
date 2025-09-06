@@ -27,11 +27,12 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import asyncio
 import base64
 import random
 import time
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 from uuid import uuid4
 
 import httpx
@@ -47,7 +48,7 @@ from cryptography.hazmat.primitives.serialization import (
     pkcs12,
 )
 from cryptography.x509.oid import NameOID
-from meatie import api_ref, body, endpoint
+from meatie import ParseResponseError, api_ref, body, endpoint
 from pydantic import BaseModel
 
 
@@ -594,8 +595,7 @@ class Device(BaseModel):
     appVersion: str
     createdDate: str
     formFactor: str
-    isPushNotificationEnabled: bool
-    lastExAuthnDate: str
+    lastExAuthnDate: Optional[str] = None
     lastUpdatedDate: str
     name: str
     osVersion: str
@@ -637,6 +637,22 @@ class Event(BaseModel):
     eventType: str
     links: list[Link]
     additionalData: EventAdditionalData
+
+    def get_device_id(self) -> int:
+        """Returns event's device ID parsed from links."""
+        for link in self.links:
+            if link.rel == "self" and link.method == "get":
+                # Parse device id from links.
+                # >>> href = "/api/v1/identities/31312345/devices/29745678/events/839667890"
+                # >>> href.split("/")[6]
+                # '29745678'
+                return int(link.href.split("/")[6])
+
+
+class AuthenticationResponseBody(BaseModel):
+    correlationId: str
+    eventType: Literal["AuthenticationAccepted", "AuthenticationRejected"]
+    evidenceToken: Optional[str] = None
 
 
 class ExtensionClient(meatie_httpx.AsyncClient):
@@ -691,12 +707,68 @@ class ExtensionClient(meatie_httpx.AsyncClient):
         fail to parse the (lack of) response.
         """
 
-    # TODO: accept/reject event
-    # @endpoint("/identities/{identity_id}/events")
-    # async def post_event():
-    #     pass
+    async def poll_for_authentication_event(
+        self, proof_of_identity_process_id: str
+    ) -> Event:
+        """Polls all device event queues until AuthenticationRequired event is returned."""
+        identity_id = await self.get_identity_id(proof_of_identity_process_id)
+        devices_response = await self.get_devices(identity_id)
+        device_ids = [device.get_device_id() for device in devices_response.items]
+        while True:
+            for device_id in device_ids:
+                try:
+                    event = await self.check_event_queue(identity_id, device_id)
+                    if event.eventType == "AuthenticationRequired":
+                        return event
+                # ParseResponseError indicates no event.
+                except ParseResponseError:
+                    pass
+            await asyncio.sleep(3)
 
-    # TODO: delete event
-    # @endpoint("/identities/{identity_id}/devices/{device_id}/eventqueue/events/{event_id}")
-    # async def delete_event():
-    #     pass
+    @endpoint("/identities/{identity_id}/events", method="POST")
+    async def respond_to_authentication_event(
+        self,
+        identity_id: int,
+        body: AuthenticationResponseBody,
+    ) -> str:  # Expect empty response
+        """Approve or reject an authentication event."""
+
+    @endpoint(
+        "/identities/{identity_id}/devices/{device_id}/eventqueue/events/{event_id}"
+    )
+    async def delete_event(
+        self, identity_id: int, device_id: str, event_id: int
+    ) -> str:  # Expect empty response
+        """Deletes event."""
+
+    async def approve_authentication_event(self, identity_id: int, event: Event):
+        """Approves and deletes authentication event."""
+        assert isinstance(self.client.auth, OidcAuth)
+        assert self.client.auth.token
+        evidence_token = self.client.auth.token
+        event_type = "AuthenticationAccepted"
+        await self.respond_to_authentication_event(
+            identity_id,
+            AuthenticationResponseBody(
+                correlationId=event.correlationId,
+                eventType=event_type,
+                evidenceToken=evidence_token,
+            ),
+        )
+
+        device_id = event.get_device_id()
+        await self.delete_event(identity_id, device_id, event.eventId)
+
+    async def reject_authentication_event(self, identity_id: int, event: Event):
+        """Rejects and deletes authentication event."""
+        event_type = "AuthenticationRejected"
+        await self.respond_to_authentication_event(
+            identity_id,
+            AuthenticationResponseBody(
+                correlationId=event.correlationId, eventType=event_type
+            ),
+            # AuthenticationRejectedBody(event.correlationId, event_type),
+        )
+
+        device_id = event.get_device_id()
+        await self.delete_event(identity_id, device_id, event.eventId)
