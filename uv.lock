@@ -553,7 +553,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.5" },
     { name = "pyjwt", specifier = ">=2.10.1" },
     { name = "rich-pixels", specifier = ">=3.0.1" },
-    { name = "textual", specifier = ">=5.3.0" },
+    { name = "textual", specifier = ">=6.1.0" },
     { name = "textual-dev", specifier = ">=1.7.0" },
 ]
 
