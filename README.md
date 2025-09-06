@@ -1,4 +1,4 @@
-# Open myID
+# Open myID ![](wizard.png)
 
 **Use [myID](https://www.myid.gov.au/) without a smartphone**
 
@@ -42,6 +42,10 @@ If you're familiar with Python and the command line, you can run Open myID with 
 Or launch it in a browser instead of the command line:
 
     uvx --from git+https://github.com/eidorb/openmyid textual serve openmyid
+
+## Demo
+
+<video src="https://github.com/user-attachments/assets/7696db66-9e9b-4337-8c7e-7e692b2ee706" controls></video>
 
 ## Development
 
