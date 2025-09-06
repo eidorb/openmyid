@@ -583,7 +583,7 @@ class InitialScreen(Screen):
         with Horizontal():
             yield Static(
                 Pixels.from_image_path(
-                    Path(__name__).parent / "wizard.png",
+                    Path(__file__).parent / "wizard.png",
                     renderer=HalfcellRenderer(default_color="#E0E0E0"),
                 ),
                 id="wizard",
