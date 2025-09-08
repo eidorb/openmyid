@@ -451,7 +451,7 @@ class AuthenticatorScreen(Screen):
     Vertical {
         margin: 0 4;
     }
-    #email {
+    .details {
         margin: 1 0;
     }
     LoadingIndicator {
@@ -488,7 +488,14 @@ class AuthenticatorScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(AuthenticatorScreen.__doc__)
         with Vertical():
-            yield Static(f"Identity: [bold]{self.identity.email}[/bold]", id="email")
+            yield Static(
+                f"myID identity: [bold]{self.identity.email}[/bold]", classes="details"
+            )
+            yield Static(
+                f"Valid from: {self.identity.certificate.not_valid_before_utc.strftime('%c')}\n"
+                f"Valid until: {self.identity.certificate.not_valid_after_utc.strftime('%c')}",
+                classes="details",
+            )
             yield Static("Waiting for login request...")
             yield LoadingIndicator()
             yield Button("Sign Out", "error")
@@ -576,7 +583,7 @@ class InitialScreen(Screen):
 
     def __init__(self):
         super().__init__()
-        self.app: OpenMyid98
+        self.app: OpenMyid
 
     def compose(self) -> ComposeResult:
         yield Static(__doc__.split("-")[0], id="ascii-art")
@@ -705,7 +712,7 @@ class InitialScreen(Screen):
         self.loading = False
 
 
-class OpenMyid98(App):
+class OpenMyid(App):
     """A myID Textual app."""
 
     def __init__(self, identity_store: IdentityStore):
@@ -719,7 +726,7 @@ class OpenMyid98(App):
 
 def main():
     identity_store = IdentityStore("openmyid.db")
-    app = OpenMyid98(identity_store)
+    app = OpenMyid(identity_store)
     app.run()
     identity_store.connection.close()
 
