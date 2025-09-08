@@ -1,6 +1,12 @@
 # Open myID ![](wizard.png)
 
-**Use [myID](https://www.myid.gov.au/) without a smartphone**
+Use [myID](https://www.myid.gov.au/) without a smartphone.
+
+> [!WARNING]
+> This project serves an educational purpose: to understand and document the myID Digital ID system.
+> The software is provided "as is" without warranty of any kind, as outlined in the GPL.
+
+## Introduction
 
 myID is the Australian Government's Digital ID app, used to access online government
 services.
@@ -20,42 +26,71 @@ express the Australian public's opinion of the official myID app:
 - "Trash."
 - "NO"
 
-## Getting started
+This project contains
 
-Open myID is a Python application that can run on any computer. It allows you authenticate
-to government services with myID if
+- `myid.py`: a Python module implementing myID digital identity utilities and clients used to interact with the myID API
+- `openmyid.py`: a [Textual](https://textual.textualize.io) application which allows use of myID from a command line or web browser
+
+Open myID runs on any computer, allowing you to authenticate to government services if
 
 - your smartphone is lost or stolen
-- you only have a wired connection (no Wi-Fi or cellular)
+- you have a wired internet connection only (no Wi-Fi or cellular)
 - you have issues with the official app
 
-Open myID works best in conjunction with the official app:
+## Getting started
 
-- install myID
-- create an identity
-- verify your identity to highest security level required
+Open myID works best if you set up your identity on the official app first:
 
-If you're familiar with Python and the command line, you can run Open myID with [uv](https://docs.astral.sh/uv/):
+- Install myID
+- Create an identity
+- Verify your identity to highest security level required
+
+Run Open myID from the command line, directly from this repository, with [uv](https://docs.astral.sh/uv/):
 
     uvx --from git+https://github.com/eidorb/openmyid openmyid
 
-Or launch it in a browser instead of the command line:
+This command installs all required Python dependencies and runs the Open myID application.
+
+Alternatively, start a web server to use Open myID from a browser (instead of the command line):
 
     uvx --from git+https://github.com/eidorb/openmyid textual serve openmyid
+
+Open myID stores your encrypted digital identity in an SQLite database (`openmyid.db`) beside the application.
+It is **your responsibility** to protect the database and use a strong password.
 
 ## Demo
 
 <video src="https://github.com/user-attachments/assets/7696db66-9e9b-4337-8c7e-7e692b2ee706" controls></video>
 
-## Development
+## How it works
 
-Clone this repository if you want to tweak or extend Open myID.
+The following diagrams depict simplified high-level interactions with the myID system.
 
-- `myid.py` is a module implementing classes and models used to interact with the myID API
-- `openmyid.py` is a [Textual](https://textual.textualize.io) application
+```mermaid
+sequenceDiagram
+    UnauthenticatedClient->>myID:Email verification request
+    myID->>UnauthenticatedClient:Proof of identity (POI) identifier
+    UnauthenticatedClient->>myID:Verification code
+```
 
-## Security
+```mermaid
+sequenceDiagram
+    AssuranceClient->>AssuranceClient:Generate key pair
+    AssuranceClient->>myID:Certificate signing request
+    myID->>AssuranceClient:Signed certificate
+```
 
-- Your digital identity is backed by an RSA public/private key pair
-- `openmyid.py` stores your identity in an SQLite database (`openmyid.py`), encrypted using a password
-- It is your responsibility to keep your digital identity safe, and use a strong password
+```mermaid
+sequenceDiagram
+    CredentialClient->>myID:Personal details
+```
+
+```mermaid
+sequenceDiagram
+    ExtensionClient->>ExtensionClient:Sign JSON Web Token
+    ExtensionClient->>myID:OpenID Connect
+    myID->>ExtensionClient:Access token
+    ExtensionClient->>myID:Poll event queue
+    myID->>ExtensionClient:Authentication event
+    ExtensionClient->>myID:Approve authentication event
+```
