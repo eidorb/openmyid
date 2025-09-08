@@ -374,7 +374,7 @@ class UnauthenticatedClient(meatie_httpx.AsyncClient):
     """
 
     def __init__(self):
-        """Initiates HTTP client with static and dynamic headers."""
+        """Initialises HTTP client with static and dynamic headers."""
         super().__init__(
             httpx.AsyncClient(
                 headers=static_headers,
@@ -701,10 +701,11 @@ class ExtensionClient(meatie_httpx.AsyncClient):
     ) -> Event:
         """Returns event or raises `meatie.ParseResponseError` exception.
 
-        Poll this endpoint, wrapped in a try/except clause event is returned.
+        myID returns 404 Not Found if there is no event in the queue. Meatie will
+        fail to parse empty response body, raising `meatie.ParseResponseError`.
 
-        The server returns a 404 status if there is no event, causing Meatie to
-        fail to parse the (lack of) response.
+        To wait for an event, call this endpoint wrapped in a try/except clause
+        until an event is returned (see `.poll_for_authentication_event()` below).
         """
 
     async def poll_for_authentication_event(
@@ -767,7 +768,6 @@ class ExtensionClient(meatie_httpx.AsyncClient):
             AuthenticationResponseBody(
                 correlationId=event.correlationId, eventType=event_type
             ),
-            # AuthenticationRejectedBody(event.correlationId, event_type),
         )
 
         device_id = event.get_device_id()
